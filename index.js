@@ -79,7 +79,7 @@ Dedupe.prototype._findBySize = function(filename, stat, onDone) {
     self.hashByName[filename] = new Hash(filename, stat.size);
   }
 
-  parallel(1, this.bySize[stat.size].map(function(comparename) {
+  parallel(Math.min(this.bySize[stat.size].length, 8), this.bySize[stat.size].map(function(comparename) {
     return function(done) {
       // skip if the file name is the same, or if the result has already been resolved at this point
       if (comparename === filename || result) {
@@ -98,8 +98,14 @@ Dedupe.prototype._findBySize = function(filename, stat, onDone) {
     };
   }), function(err) {
     if (err) {
-      onDone(err, false, stat);
+      return onDone(err, false, stat);
     }
+    // // remove the file from the list if it is not unique
+    // if (!result) {
+    //   var index = self.bySize[stat.size].indexOf(filename);
+    //   self.bySize[stat.size].splice(index, 1);
+    // }
+
     onDone(null, result, stat);
   });
 };
@@ -116,19 +122,21 @@ Dedupe.prototype.compare = function(nameA, nameB, onDone) {
     var hashA, hashB;
 
     if (self.sync) {
-      return checkSync(a.getSync(index), b.getSync(index));
+      checkSync(a.getSync(index), b.getSync(index));
+      self.bytesRead += a.lastBytes + b.lastBytes;
+      return;
     }
 
-    a.get(index, function(err, hash, bytesRead) {
-      self.bytesRead += bytesRead;
+    a.get(index, function(err, hash) {
+      self.bytesRead += a.lastBytes;
       if (err) {
         return onDone(err, false);
       }
       hashA = hash;
       check(hashA, hashB);
     });
-    b.get(index, function(err, hash, bytesRead) {
-      self.bytesRead += bytesRead;
+    b.get(index, function(err, hash) {
+      self.bytesRead += b.lastBytes;
       if (err) {
         return onDone(err, false);
       }
@@ -150,7 +158,7 @@ Dedupe.prototype.compare = function(nameA, nameB, onDone) {
     }
     a.close();
     b.close();
-    onDone(null, false);
+    onDone(null, true);
   }
 
   function check(hashA, hashB) {
@@ -172,7 +180,7 @@ Dedupe.prototype.compare = function(nameA, nameB, onDone) {
     }
     a.close(function() {
       b.close(function() {
-        onDone(null, false);
+        onDone(null, true);
       });
     });
     return;

@@ -15,6 +15,7 @@ function Hash(filename, size) {
   // do not duplicate requests, but rather queue them
   this.emitter = new Microee();
   this.pending = [];
+  this.lastBytes = 0;
 }
 
 Hash.prototype._params = function(index) {
@@ -32,10 +33,12 @@ Hash.prototype._params = function(index) {
 Hash.prototype.get = function(index, onDone) {
   // zero-length files cannot be read, skip
   if (this.size === 0) {
-    return onDone(null, false, 0);
+    this.lastBytes = 0;
+    return onDone(null, false);
   }
   if (this.hashes[index]) {
-    return onDone(null, this.hashes[index], 0);
+    this.lastBytes = 0;
+    return onDone(null, this.hashes[index]);
   }
 
   var self = this,
@@ -96,8 +99,9 @@ Hash.prototype.get = function(index, onDone) {
         self.pending = self.pending.filter(function(value) {
           return value != index;
         });
-        onDone(null, self.hashes[index], totalRead);
-        self.emitter.emit('calculate:' + index, null, self.hashes[index], totalRead);
+        self.lastBytes = totalRead;
+        onDone(null, self.hashes[index]);
+        self.emitter.emit('calculate:' + index, null, self.hashes[index]);
         done();
       });
     }
@@ -108,9 +112,11 @@ Hash.prototype.get = function(index, onDone) {
 Hash.prototype.getSync = function(index) {
   // zero-length files cannot be read, skip
   if (this.size === 0) {
+    this.lastBytes = 0;
     return false;
   }
   if (this.hashes[index]) {
+    this.lastBytes = 0;
     return this.hashes[index];
   }
   var self = this,
@@ -144,6 +150,7 @@ Hash.prototype.getSync = function(index) {
   self.hashes[index] = hash.digest('base64');
   hash = null;
   readBuffer = null;
+  this.lastBytes = totalRead;
 
   return self.hashes[index];
 };

@@ -16,8 +16,10 @@ var fs = require('fs'),
     bytes = require('bytes');
 
 var dedupe = new Dedupe({ async: argv.async }),
-    queue = parallel(64),
-    progress = { total: 0, complete: 0 };
+    queue = parallel(32),
+    progress = { total: 0, complete: 0 },
+    prev = 0,
+    tasks = [];
 
 // queue.maxStack = Infinity;
 
@@ -47,10 +49,6 @@ function status() {
           .replace(':percent', percent.toFixed(0) + '%');
 }
 
-var prev = 0;
-
-var tasks = [];
-
 queue.once('err', function(err) {
   throw err;
 });
@@ -66,11 +64,13 @@ function scanStatus() {
 // parallel access - and globs are significantly slower, see https://github.com/isaacs/node-glob/issues/78
 var count = 0;
 var dups = {},
-    sizes = {};
+    sizes = {},
+    dupCount = 0;
+var fullResult = {};
 
 function walk(path) {
   try {
-    var stat = fs.statSync(path);
+    var stat = fs.lstatSync(path);
   } catch (e) {
     return;
   }
@@ -118,9 +118,27 @@ if (argv.stdin) {
   walk(argv.include);
   process.stderr.write('\n');
   // eliminate length-0
-  prev = tasks.length;
-  tasks = tasks.filter(function(item) { return !item[1] || item[1].size > 0; });
-  console.error('Removed ' + (prev - tasks.length) + ' files with zero size from list.');
+  if (tasks[0][1]) {
+    prev = tasks.length;
+    tasks = tasks.filter(function(item) { return item[1].size > 0; });
+    console.error('Removed ' + (prev - tasks.length) + ' files with zero size from list.');
+    // filter by size
+    var countBySize = {};
+    prev = tasks.length;
+    tasks.forEach(function(task) {
+      if (!countBySize[task[1].size]) {
+        countBySize[task[1].size] = 1;
+      } else {
+        countBySize[task[1].size]++;
+      }
+    });
+    tasks = tasks.filter(function(task) {
+      return (countBySize[task[1].size] > 1);
+    });
+    console.error('Removed ' + (prev - tasks.length) + ' files with unique file sizes from the list.');
+    countBySize = null;
+  }
+
   run();
 }
 
@@ -134,7 +152,7 @@ function printStatus() {
   process.stderr.cursorTo(0);
   process.stderr.write(status() + ' ' +
     (progress.complete - prev) + ' items / s' +
-    ' read ' + bytes(dedupe.bytesRead) + ' bytes');
+    ' read ' + bytes(dedupe.bytesRead));
 
   prev = progress.complete;
 
@@ -143,7 +161,6 @@ function printStatus() {
     process.stderr.write('\n');
   }
 }
-
 
 function run() {
   prev = 0;
@@ -163,15 +180,25 @@ function run() {
   // this lets us keep the file handles open until the file size changes
   if (tasks[0][1]) {
     tasks = tasks.sort(function(a, b) {
-      return a[1].size - b[1].size;
+      var cluster = a[1].size - b[1].size;
+      if (cluster !== 0) {
+        return cluster;
+      } else {
+        return a[1].ino - b[1].ino;
+      }
     });
   }
+
+//  tasks.map(function(task) {
+//    console.log(task[1].size, task[1].ino, task[1].dev, task[0]);
+//  });
 
   queue.exec(tasks.map(function(items) {
     return function(done) {
       var name = items[0];
       dedupe.find(name, items[1], function(err, result, stat) {
         if (result !== false) {
+          dupCount++;
           if (!dups[result]) {
             dups[result] = [ path.normalize(name) ];
             sizes[result] = stat.size;
@@ -179,6 +206,7 @@ function run() {
             dups[result].push(path.normalize(name));
           }
         }
+//        fullResult[name] = result;
 
         progress.complete++;
         done();
@@ -192,6 +220,8 @@ function report() {
   var clusters = [];
 
   printStatus();
+
+  console.error('Found ' + dupCount + ' files that are not unique.');
 
   Object.keys(dups).forEach(function(key) {
     clusters.push([key].concat(dups[key]));
@@ -223,6 +253,14 @@ function report() {
       });
       console.log();
     });
+  } else if (false) {
+    console.log();
+    Object.keys(fullResult).forEach(function(name) {
+      if(name.match(/jdk.tools\-1\.6\.jar/)) {
+        console.log(name, fullResult[name], dedupe.hashByName[name]);
+      }
+    });
+    console.log();
   } else {
     console.log();
     clusters.forEach(function(cluster, i) {

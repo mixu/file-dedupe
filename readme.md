@@ -18,12 +18,12 @@ The algorithm is as follows:
 
 ## Performance
 
-`file-dedupe` is quite fast - it is within 2x of the fastest duplicate finders written in C/C++. Based on the V8 profiler output, about 40% of the time is spent on I/O, 13% on crypto and 11% on file traversal, so any further gains in performance will need to come from I/O optimizations rather than code optimizations.
+`findup` is quite fast - it is within 2x of the fastest duplicate finders written in C/C++. Based on the V8 profiler output, about 40% of the time is spent on I/O, 13% on crypto and 11% on file traversal, so any further gains in performance will need to come from I/O optimizations rather than code optimizations.
 
     rdfind: 2.22user 1.96system 0:04.24elapsed 98%CPU (0avgtext+0avgdata 57984maxresident)k
     duff: 2.66user 1.66system 0:04.34elapsed 99%CPU (0avgtext+0avgdata 80432maxresident)k
     fslint: 9.49user 5.78system 0:11.01elapsed 138%CPU (0avgtext+0avgdata 29632maxresident)k
-    findup: 5.46user 4.55system 0:09.36elapsed 106%CPU (0avgtext+0avgdata 1138080maxresident)k
+    findup: 5.36user 3.29system 0:08.20elapsed 105%CPU (0avgtext+0avgdata 717056maxresident)k
 
 BTW, you may notice that `file-dedupe` defaults to sync I/O. This is because the async I/O seems to have significant overhead for typical FS tasks. You can test this out by passing the `--async` flag on your system.
 
