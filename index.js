@@ -16,8 +16,12 @@ Dedupe.prototype.find = function(filename, stat, onDone) {
   var self = this;
   filename = path.normalize(filename);
 
-  if (arguments.length == 2) {
+  if (arguments.length === 2) {
     onDone = stat;
+    stat = null;
+  }
+
+  if (!stat) {
     this.statCalls++;
     fs.stat(filename, function(err, stat) {
       if (err) {

@@ -6,6 +6,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "bin": {
+    "findup": "./bin/findup"
+  },
   "repository": {
     "type": "git",
     "url": "git://github.com/mixu/file-dedupe.git"
@@ -28,9 +31,9 @@
     "file-fixture": "0.0.0"
   },
   "dependencies": {
-    "glob-stream": "^3.1.11",
+    "bytes": "1.0.0",
     "microee": "0.0.5",
     "miniq": "0.0.1",
-    "yargs": "^1.2.2"
+    "yargs": "1.2.2"
   }
 }

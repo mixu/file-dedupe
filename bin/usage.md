@@ -1,22 +1,29 @@
-findup
+
+Usage: findup --include <path>
 
 Options:
 
     --include <path> Include path
-    --full  Return full paths (bare output, suitable for xargs)
-    --json  Return JSON output
-    --min-size <size> Filter by min size
-    --max-size <size> Filter by max size
-    --user <uid>  Filter by user
+    --stdin          Read list from stdin
+    --list           Return full paths (plain output, suitable for xargs)
+    --json           Return JSON output
     --omit-first     Omit the first file in each set of matches
-    --verbose Increase verbosity
-    -v Display version
+    --help           Display help
+    -v, --version    Display version
 
 Examples:
 
-  `findup .`: find all duplicates in current directory and below
-  `findup . --max-size 100k`: find all duplicate files over 100K in size
-  `findup . --user `id -u``: find all duplicate files belonging to me
+    `findup --include . > report.txt`: find all duplicates in current directory and below
 
-Piping into findup: you can also pipe into findup from `find` or some other command.
-reads a list of files from standard input (eg., as produced by "find . -print") and looks for identical files
+Note that progress is reported on stderr, and output is produced on stdout, so you can just pipe the output to ignore the status information.
+
+Advanced selection:
+
+If you want to select files by size or by user, you can use the Unix `find` command to filter out files. For example:
+
+    find . -name "*.csv" -print | findup --stdin > report.txt
+
+To only look at files with size > 100k:
+
+    find . -size +100k -print | findup --stdin > report.txt
+

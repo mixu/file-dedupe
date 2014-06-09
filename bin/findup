@@ -1,25 +1,22 @@
+#!/usr/bin/env node
 var opts = require('yargs')
     .options({
-      'exclude': { },
       'include': { },
-      'jobs': { },
-      'verbose': { },
     })
-    .boolean('verbose')
+    .boolean('json')
+    .boolean('list')
+    .boolean('stdin')
     argv = opts.parse(process.argv);
 
-var gs = require('glob-stream'),
+var fs = require('fs'),
+    path = require('path'),
     Dedupe = require('../index.js'),
-    parallel = require('miniq');
+    parallel = require('miniq'),
+    bytes = require('bytes');
 
-var globs = (Array.isArray(argv.include) ? argv.include : [ argv.include ] ).concat(
-             Array.isArray(argv.exclude) ? argv.exclude : [ argv.exclude ] ).filter(Boolean);
-
-var dedupe = new Dedupe();
-
-var queue = parallel(12);
-
-var progress = { total: 0, complete: 0 };
+var dedupe = new Dedupe(),
+    queue = parallel(12),
+    progress = { total: 0, complete: 0 };
 
 var start,
     width = 20,
@@ -49,8 +46,7 @@ function status() {
 
 var prev = 0;
 
-var names = [],
-    stats = [];
+var tasks = [];
 
 queue.once('err', function(err) {
   throw err;
@@ -59,105 +55,173 @@ queue.once('err', function(err) {
 function scanStatus() {
   process.stderr.clearLine();
   process.stderr.cursorTo(0);
-  process.stderr.write('Found ' + names.length + ' files.');
+  process.stderr.write('Found ' + tasks.length + ' files.');
 
 }
 
-var scanInterval = setInterval(scanStatus, 1000);
+// sync FS access is actually faster in cases where you don't need to perform
+// parallel access - and globs are significantly slower, see https://github.com/isaacs/node-glob/issues/78
+var count = 0;
 
-if (argv.method == 'glob') {
-  var globStream = gs.create(globs, { read: false, buffer: false });
-
-  globStream.on('data', function(item) {
-    names.push(item.path);
-
-    process.stderr.write(' ');
-    process.stderr.clearLine();
-    process.stderr.cursorTo(0);
-    process.stderr.write(names.length.toString());
-
-  });
-
-
-  globStream.on('end', function() {
-    run();
-  });
-} else {
-  var fs = require('fs'),
-      count = 0;
-
-  function walk (path) {
+function walk(path) {
+  try {
+    var stat = fs.statSync(path);
+  } catch (e) {
+    return;
+  }
+  if (stat.isDirectory()) {
     try {
-      var stat = fs.statSync(path);
-    } catch (e) {
+      fs.readdirSync(path).forEach(function(entry) {
+        walk(path + '/' + entry);
+      });
+    } catch(e) {
       return;
     }
-    if (stat.isDirectory()) {
-      try {
-        fs.readdirSync(path).forEach(function(entry) {
-          walk(path + '/' + entry);
-        });
-      } catch(e) {
-        return;
-      }
-    } else {
-      names.push(path);
-      stats.push(stat);
-      if (names.length > prev + 100) {
-        scanStatus();
-        prev = names.length;
-      }
+  } else {
+    tasks.push([path, stat]);
+    if (tasks.length > prev + 100) {
+      scanStatus();
+      prev = tasks.length;
     }
   }
+}
 
+if(argv['version'] || argv['v'] ) {
+  console.log(require('../package.json').version);
+  process.exit();
+}
+
+if(!argv['include'] && !argv['stdin']) {
+  return fs.createReadStream(__dirname + '/usage.md').pipe(process.stdout).on('close', function () { process.exit(1) });
+}
+
+
+// Try reading from stdin
+if (argv.stdin) {
+  var input = '';
+  process.stdin.on('data', function(data) {
+    input += data;
+  });
+  process.stdin.once('end', function() {
+    tasks = input.split('\n').map(function(name) {
+      return [ name, null ];
+    });
+    run();
+  });
+  process.stdin.resume();
+} else {
   walk(argv.include);
+  process.stderr.write('\n');
+  // eliminate length-0
+  prev = tasks.length;
+  tasks = tasks.filter(function(item) { return !item[1] || item[1].size > 0; });
+  console.error('Removed ' + (prev - tasks.length) + ' files with zero size from list.');
   run();
 }
 
+var statusInterval;
+
+function printStatus() {
+  if (!statusInterval) {
+    return;
+  }
+  process.stderr.clearLine();
+  process.stderr.cursorTo(0);
+  process.stderr.write(status() + ' ' +
+    (progress.complete - prev) + ' items / s' +
+    ' read ' + bytes(dedupe.bytesRead) + ' bytes');
+
+  prev = progress.complete;
+
+  if (progress.complete == progress.total) {
+    clearInterval(statusInterval);
+    process.stderr.write('\n');
+  }
+}
+
+
 function run() {
   prev = 0;
-  clearInterval(scanInterval);
 
-  var statusInterval = setInterval(function() {
-    process.stderr.clearLine();
-    process.stderr.cursorTo(0);
-    process.stderr.write(status() + ' ' +
-      (progress.complete - prev) + ' items / s' +
-      ' read ' + dedupe.bytesRead + ' bytes' +
-      JSON.stringify(process.memUsage(), null, 2));
+  statusInterval = setInterval(printStatus, 1000);
 
-    prev = progress.complete;
-
-    if (progress.complete === progress.total) {
-      clearInterval(statusInterval);
-    }
-  }, 1000);
-
-  progress.total = names.length;
+  progress.total = tasks.length;
   start = new Date();
   process.stderr.write(' ');
   process.stderr.clearLine();
   process.stderr.cursorTo(0);
   process.stderr.write(status());
 
-  queue.exec(names.map(function(name, i) {
+  queue.once('empty', report);
+
+  queue.exec(tasks.map(function(items) {
     return function(done) {
-      if (stats[i]) {
-        dedupe.find(name, stats[i], function(err, result, stat) { report(err, result, stat, done); });
-      } else {
-        dedupe.find(name, function(err, result, stat) { report(err, result, stat, done); });
-      }
+      var name = items[0]
+      dedupe.find(name, items[1], function(err, result, stat) {
+        if (result !== false) {
+          if (!dups[result]) {
+            dups[result] = [ path.normalize(name) ];
+            sizes[result] = stat.size;
+          } else {
+            dups[result].push(path.normalize(name));
+          }
+        }
+
+        progress.complete++;
+        done();
+      });
     };
   }));
 }
 
-function report(err, result, stat, done) {
-  if (result !== false) {
-    //console.log(name, result);
+var dups = {},
+    sizes = {};
+
+
+function report() {
+  var clusters = [];
+
+  printStatus();
+
+  Object.keys(dups).forEach(function(key) {
+    clusters.push([key].concat(dups[key]));
+  });
+
+  // sort by total size
+  clusters.sort(function(a, b) {
+    return (b.length * sizes[b[0]]) - (a.length * sizes[a[0]] );
+  });
+
+  if (argv.json) {
+    clusters.forEach(function(cluster) {
+      var size = sizes[cluster[0]];
+
+      if (argv['omit-first']) {
+        cluster = cluster.slice(1);
+      }
+
+      console.log(JSON.stringify({ files: cluster, size: size, total: cluster.length * size }));
+    });
+  } else if(argv.list) {
+    clusters.forEach(function(cluster) {
+      var size = sizes[cluster[0]];
+      if (argv['omit-first']) {
+        cluster = cluster.slice(1);
+      }
+      cluster.map(function(name) {
+        console.log(name);
+      });
+      console.log();
+    });
+  } else {
+    console.log();
+    clusters.forEach(function(cluster, i) {
+      var size = sizes[cluster[0]];
+      console.log(cluster.length + ' files in cluster ' + i + ' (' + bytes(size) + ' bytes each, ' + bytes(cluster.length * size) + ' total)');
+      cluster.map(function(name) {
+        console.log(name);
+      });
+      console.log();
+    });
   }
-
-  progress.complete++;
-  done();
 }
-
-
