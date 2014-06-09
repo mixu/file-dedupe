@@ -4,7 +4,7 @@ var fs = require('fs'),
     parallel = require('miniq');
 
 function Dedupe() {
-  this.byInode = {};
+  this.inodeByDev = {};
   this.bySize = {};
   this.sizeByName = {};
   this.hashByName = {};
@@ -43,14 +43,16 @@ Dedupe.prototype._check = function(filename, stat, onDone) {
 
   self.sizeByName[filename] = stat.size;
 
-  if (stat.ino !== 0 && self.byInode[stat.ino]) {
-    self.byInode[stat.inode] = filename;
-    return onDone(null, self.byInode[stat.ino], stat);
-  }
   if (stat.ino !== 0) {
-    self.byInode[stat.inode] = filename;
+    if (!self.inodeByDev[stat.dev]) {
+      self.inodeByDev[stat.dev] = {};
+    }
+    if (self.inodeByDev[stat.dev][stat.ino]) {
+      return onDone(null, self.inodeByDev[stat.dev][stat.ino], stat);
+    } else {
+      self.inodeByDev[stat.dev][stat.ino] = filename;
+    }
   }
-
   // push before starting the comparison; this allows _findBySize to be async and yet
   // pick up the candidate match
   if (!self.bySize[stat.size]) {
