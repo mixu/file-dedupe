@@ -6,6 +6,7 @@ var opts = require('yargs')
     .boolean('json')
     .boolean('list')
     .boolean('stdin')
+    .boolean('async')
     argv = opts.parse(process.argv);
 
 var fs = require('fs'),
@@ -14,11 +15,11 @@ var fs = require('fs'),
     parallel = require('miniq'),
     bytes = require('bytes');
 
-var dedupe = new Dedupe(),
-    queue = parallel(12),
+var dedupe = new Dedupe({ async: argv.async }),
+    queue = parallel(64),
     progress = { total: 0, complete: 0 };
 
-queue.maxStack = Infinity;
+// queue.maxStack = Infinity;
 
 var start,
     width = 20,
@@ -64,6 +65,8 @@ function scanStatus() {
 // sync FS access is actually faster in cases where you don't need to perform
 // parallel access - and globs are significantly slower, see https://github.com/isaacs/node-glob/issues/78
 var count = 0;
+var dups = {},
+    sizes = {};
 
 function walk(path) {
   try {
@@ -156,6 +159,14 @@ function run() {
 
   queue.once('empty', report);
 
+  // sort by file size
+  // this lets us keep the file handles open until the file size changes
+  if (tasks[0][1]) {
+    tasks = tasks.sort(function(a, b) {
+      return a[1].size - b[1].size;
+    });
+  }
+
   queue.exec(tasks.map(function(items) {
     return function(done) {
       var name = items[0];
@@ -175,9 +186,6 @@ function run() {
     };
   }));
 }
-
-var dups = {},
-    sizes = {};
 
 
 function report() {

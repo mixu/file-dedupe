@@ -1,6 +1,7 @@
 var fs = require('fs'),
     crypto = require('crypto'),
-    Microee = require('microee');
+    Microee = require('microee'),
+    parallel = require('miniq');
 
 // calculates and caches hashes for a file
 function Hash(filename, size) {
@@ -9,17 +10,26 @@ function Hash(filename, size) {
   // largest power of two, minus 12 (2^12 = 4k)
   this.maxIndex = Math.floor(Math.log(size) / Math.LN2) - 10;
   this.hashes = [];
-  this.hash = null;
   this.fd = null;
-  this.buffer = null;
   // if concurrent requests are made to the same path + index,
   // do not duplicate requests, but rather queue them
   this.emitter = new Microee();
   this.pending = [];
 }
 
+Hash.prototype._params = function(index) {
+ // first size is 2k
+  var offset = (index === 0 ? 0 : Math.pow(2, 10 + index)),
+      limit = Math.pow(2, 10 + index + 1);
+
+  // smaller of file size and value
+  offset = Math.min(this.size, offset);
+  limit = Math.min(this.size, limit);
+
+  return [ offset, limit ];
+};
+
 Hash.prototype.get = function(index, onDone) {
-  var self = this;
   // zero-length files cannot be read, skip
   if (this.size === 0) {
     return onDone(null, false, 0);
@@ -28,7 +38,13 @@ Hash.prototype.get = function(index, onDone) {
     return onDone(null, this.hashes[index], 0);
   }
 
-  // console.log('GET', self.filename, index);
+  var self = this,
+      opts = this._params(index),
+      offset = opts[0],
+      limit = opts[1],
+      totalPending = limit - offset,
+      bsize = Math.min(totalPending, 64 * 1024),
+      totalRead = 0;
 
   // prevent duplicate pending reads
   if (this.pending.indexOf(index) > -1) {
@@ -37,60 +53,42 @@ Hash.prototype.get = function(index, onDone) {
   }
   this.pending.push(index);
 
-  // first size is 2k
-  var offset = (index === 0 ? 0 : Math.pow(2, 10 + index)),
-      limit = Math.pow(2, 10 + index + 1);
-
-  // smaller of file size and value
-  offset = Math.min(this.size, offset);
-  limit = Math.min(this.size, limit);
-
-  if (this.fd !== null) {
-    return this.calculate(this.fd, offset, limit, index, onDone);
-  }
-  fs.open(this.filename, 'r', function(err, fd) {
-    if (err) {
-      return onDone(err, false, 0);
-    }
-    self.fd = fd;
-    self.calculate(fd, offset, limit, index, onDone);
-  });
-};
-
-Hash.prototype.calculate = function(fd, offset, limit, index, onDone) {
-  var self = this,
-      totalPending = limit - offset,
-      totalRead = 0;
-
-  var bsize = Math.min(totalPending, 64 * 1024);
-
   // each index calculation gets its own hash and buffer instances
-  var hash =  crypto.createHash('md5');
-  var readBuffer = new Buffer(bsize);
+  var hash = crypto.createHash('md5'),
+      readBuffer = new Buffer(bsize);
 
-  // perform reads 32k at a time; push directly into the hashing algorithm so the buffer
-  // can be discarded
-  function read() {
-    // console.log('READ', self.filename, 0, readBuffer.length, self.size, offset, offset + totalRead);
-    fs.read(fd, readBuffer, 0, readBuffer.length, offset + totalRead, function(err, bytesRead, buffer) {
+  function read(complete) {
+    fs.read(self.fd, readBuffer, 0, readBuffer.length, offset + totalRead, function(err, bytesRead) {
       totalRead += bytesRead;
       if (err) {
-        return onDone(err, false, 0);
+        throw err;
       }
+      // update hash
       try {
-        hash.update(buffer.slice(0, bytesRead));
+        hash.update(bytesRead == readBuffer.length ? readBuffer : readBuffer.slice(0, bytesRead));
       } catch (err) {
-        console.error('Hash.update failed for ' + self.filename + '.', {
-          offset: offset,
-          totalRead: totalRead,
-          bytesRead: bytesRead,
-          totalPending: totalPending,
-          buffer: buffer.slice(0, bytesRead).toString(),
-          hash: hash });
         throw err;
       }
       if (totalRead == totalPending) {
-        // console.log('Hash.digest for ' + self.filename, totalRead, totalPending);
+        return complete();
+      }
+      read(complete);
+    });
+  }
+
+  parallel(1, [
+    function(done) {
+      if (self.fd) {
+        return done();
+      }
+      fs.open(self.filename, 'r', function(err, fd) {
+        if (err) { throw err; }
+        self.fd = fd;
+        done();
+      });
+    },
+    function(done) {
+      read(function() {
         self.hashes[index] = hash.digest('base64');
         hash = null;
         readBuffer = null;
@@ -100,26 +98,67 @@ Hash.prototype.calculate = function(fd, offset, limit, index, onDone) {
         });
         onDone(null, self.hashes[index], totalRead);
         self.emitter.emit('calculate:' + index, null, self.hashes[index], totalRead);
-        return;
-      } else {
-        process.nextTick(function() {
-          read();
-        });
-      }
-    });
+        done();
+      });
+    }
+  ]);
+
+};
+
+Hash.prototype.getSync = function(index) {
+  // zero-length files cannot be read, skip
+  if (this.size === 0) {
+    return false;
+  }
+  if (this.hashes[index]) {
+    return this.hashes[index];
+  }
+  var self = this,
+      opts = this._params(index),
+      offset = opts[0],
+      limit = opts[1],
+      totalPending = limit - offset,
+      bsize = Math.min(totalPending, 64 * 1024),
+      totalRead = 0;
+
+  // each index calculation gets its own hash and buffer instances
+  var hash = crypto.createHash('md5'),
+      readBuffer = new Buffer(bsize),
+      bytesRead = 0;
+
+  if(!self.fd) {
+    self.fd = fs.openSync(this.filename, 'r');
   }
 
-  read();
+  while (totalRead < totalPending) {
+    bytesRead = fs.readSync(self.fd, readBuffer, 0, readBuffer.length, offset + totalRead);
+    totalRead += bytesRead;
+
+    try {
+      hash.update(bytesRead == readBuffer.length ? readBuffer : readBuffer.slice(0, bytesRead));
+    } catch (err) {
+      throw err;
+    }
+  }
+
+  self.hashes[index] = hash.digest('base64');
+  hash = null;
+  readBuffer = null;
+
+  return self.hashes[index];
 };
 
 // call this to close the underlying fds
-Hash.prototype.close = function() {
+Hash.prototype.close = function(onDone) {
   if (this.fd) {
-    fs.close(this.fd);
+    if (onDone) {
+      fs.close(this.fd, onDone);
+    } else {
+      fs.closeSync(this.fd);
+    }
     this.fd = null;
-  }
-  if (this.buffer) {
-    this.buffer = null;
+  } else if(onDone) {
+    onDone();
   }
 };
 

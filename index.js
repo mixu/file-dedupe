@@ -3,13 +3,15 @@ var fs = require('fs'),
     Hash = require('./hash.js'),
     parallel = require('miniq');
 
-function Dedupe() {
+function Dedupe(opts) {
   this.inodeByDev = {};
   this.bySize = {};
   this.sizeByName = {};
   this.hashByName = {};
   this.bytesRead = 0;
   this.statCalls = 0;
+  this.seen = {};
+  this.sync = (opts && opts.async ? false : true);
 }
 
 Dedupe.prototype.find = function(filename, stat, onDone) {
@@ -57,9 +59,11 @@ Dedupe.prototype._check = function(filename, stat, onDone) {
   // pick up the candidate match
   if (!self.bySize[stat.size]) {
     self.bySize[stat.size] = [ filename ];
-  } else if (self.bySize[stat.size].indexOf(filename) === -1){
+    return onDone(null, false, stat);
+  } else if (!self.seen[filename]){
     self.bySize[stat.size].push(filename);
   }
+  self.seen[filename] = true;
   self._findBySize(filename, stat, onDone);
 };
 
@@ -108,9 +112,13 @@ Dedupe.prototype.compare = function(nameA, nameB, onDone) {
       index = 0,
       maxIndex = a.maxIndex;
 
-
   function more(index) {
     var hashA, hashB;
+
+    if (self.sync) {
+      return checkSync(a.getSync(index), b.getSync(index));
+    }
+
     a.get(index, function(err, hash, bytesRead) {
       self.bytesRead += bytesRead;
       if (err) {
@@ -129,16 +137,12 @@ Dedupe.prototype.compare = function(nameA, nameB, onDone) {
     });
   }
 
-  function check(hashA, hashB) {
-    if (!hashA || !hashB) {
-      return;
-    }
-    // console.log(index, hashA, hashB);
+  function checkSync(hashA, hashB) {
     if (hashA != hashB) {
       a.close();
       b.close();
-
-      return onDone(null, false);
+      onDone(null, false);
+      return;
     }
     index++;
     if (index < maxIndex) {
@@ -146,7 +150,32 @@ Dedupe.prototype.compare = function(nameA, nameB, onDone) {
     }
     a.close();
     b.close();
-    return onDone(null, true);
+    onDone(null, false);
+  }
+
+  function check(hashA, hashB) {
+    if (!hashA || !hashB) {
+      return;
+    }
+    // console.log(index, hashA, hashB);
+    if (hashA != hashB) {
+      a.close(function() {
+        b.close(function() {
+          onDone(null, false);
+        });
+      });
+      return;
+    }
+    index++;
+    if (index < maxIndex) {
+      return more(index);
+    }
+    a.close(function() {
+      b.close(function() {
+        onDone(null, false);
+      });
+    });
+    return;
   }
   more(index);
 }
