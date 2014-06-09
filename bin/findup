@@ -1,0 +1,163 @@
+var opts = require('yargs')
+    .options({
+      'exclude': { },
+      'include': { },
+      'jobs': { },
+      'verbose': { },
+    })
+    .boolean('verbose')
+    argv = opts.parse(process.argv);
+
+var gs = require('glob-stream'),
+    Dedupe = require('../index.js'),
+    parallel = require('miniq');
+
+var globs = (Array.isArray(argv.include) ? argv.include : [ argv.include ] ).concat(
+             Array.isArray(argv.exclude) ? argv.exclude : [ argv.exclude ] ).filter(Boolean);
+
+var dedupe = new Dedupe();
+
+var queue = parallel(12);
+
+var progress = { total: 0, complete: 0 };
+
+var start,
+    width = 20,
+    fmt = '[:bar] :current / :total :percent :etas';
+
+function status() {
+  var ratio = progress.complete / progress.total;
+  ratio = Math.min(Math.max(ratio, 0), 1);
+
+  var percent = ratio * 100,
+      complete = Math.round(width * ratio),
+      incomplete,
+      elapsed = new Date() - start,
+      eta = (percent == 100) ? 0 : elapsed * (progress.total / progress.complete - 1);
+
+  complete = Array(complete).join('=');
+  incomplete = Array(width - complete.length).join(' ');
+
+  return fmt
+          .replace(':bar', complete + incomplete)
+          .replace(':current', progress.complete)
+          .replace(':total', progress.total)
+          .replace(':elapsed', isNaN(elapsed) ? '0.0' : (elapsed / 1000).toFixed(1))
+          .replace(':eta', (isNaN(eta) || !isFinite(eta)) ? '0.0' : (eta / 1000).toFixed(1))
+          .replace(':percent', percent.toFixed(0) + '%');
+}
+
+var prev = 0;
+
+var names = [],
+    stats = [];
+
+queue.once('err', function(err) {
+  throw err;
+});
+
+function scanStatus() {
+  process.stderr.clearLine();
+  process.stderr.cursorTo(0);
+  process.stderr.write('Found ' + names.length + ' files.');
+
+}
+
+var scanInterval = setInterval(scanStatus, 1000);
+
+if (argv.method == 'glob') {
+  var globStream = gs.create(globs, { read: false, buffer: false });
+
+  globStream.on('data', function(item) {
+    names.push(item.path);
+
+    process.stderr.write(' ');
+    process.stderr.clearLine();
+    process.stderr.cursorTo(0);
+    process.stderr.write(names.length.toString());
+
+  });
+
+
+  globStream.on('end', function() {
+    run();
+  });
+} else {
+  var fs = require('fs'),
+      count = 0;
+
+  function walk (path) {
+    try {
+      var stat = fs.statSync(path);
+    } catch (e) {
+      return;
+    }
+    if (stat.isDirectory()) {
+      try {
+        fs.readdirSync(path).forEach(function(entry) {
+          walk(path + '/' + entry);
+        });
+      } catch(e) {
+        return;
+      }
+    } else {
+      names.push(path);
+      stats.push(stat);
+      if (names.length > prev + 100) {
+        scanStatus();
+        prev = names.length;
+      }
+    }
+  }
+
+  walk(argv.include);
+  run();
+}
+
+function run() {
+  prev = 0;
+  clearInterval(scanInterval);
+
+  var statusInterval = setInterval(function() {
+    process.stderr.clearLine();
+    process.stderr.cursorTo(0);
+    process.stderr.write(status() + ' ' +
+      (progress.complete - prev) + ' items / s' +
+      ' read ' + dedupe.bytesRead + ' bytes' +
+      JSON.stringify(process.memUsage(), null, 2));
+
+    prev = progress.complete;
+
+    if (progress.complete === progress.total) {
+      clearInterval(statusInterval);
+    }
+  }, 1000);
+
+  progress.total = names.length;
+  start = new Date();
+  process.stderr.write(' ');
+  process.stderr.clearLine();
+  process.stderr.cursorTo(0);
+  process.stderr.write(status());
+
+  queue.exec(names.map(function(name, i) {
+    return function(done) {
+      if (stats[i]) {
+        dedupe.find(name, stats[i], function(err, result, stat) { report(err, result, stat, done); });
+      } else {
+        dedupe.find(name, function(err, result, stat) { report(err, result, stat, done); });
+      }
+    };
+  }));
+}
+
+function report(err, result, stat, done) {
+  if (result !== false) {
+    //console.log(name, result);
+  }
+
+  progress.complete++;
+  done();
+}
+
+
