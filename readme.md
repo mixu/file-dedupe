@@ -19,11 +19,13 @@ The algorithm is as follows:
 ## API
 
 - `new Dedupe()`: creates a new class, which holds all the cached metadata
-- `dedupe.find(file, [stat], onDone)`: callback `(err, result)` where result is either `false` or a full path to a file that was previously deduplicated. You can optionally pass in a `fs.Stat` object to avoid performing multiple stat operations
+- `dedupe.find(file, [stat], onDone)`: callback `(err, result)` where result is either `false` or a full path to a file that was previously deduplicated. You can optionally pass in a `fs.Stat` object to avoid having to do another `fs.stat` call in dedupe.
+
+For a usage example, see `bin/findup`.
 
 ## Command line tool
 
-`file-dedupe` ships with `findup`, a basic CLI tool for finding duplicates.
+`file-dedupe` ships with `findup`, a basic CLI tool for finding duplicates. To get it, install the module globally: `npm install -g file-dedupe`.
 
 Usage: `findup --include <path>`
 
@@ -37,9 +39,9 @@ Options:
     --help           Display help
     -v, --version    Display version
 
-Examples:
+For example, to find all duplicates in current directory and below:
 
-    `findup --include . > report.txt`: find all duplicates in current directory and below
+    findup --include . > report.txt
 
 Note that progress is reported on stderr, and output is produced on stdout, so you can just pipe the output to ignore the status information.
 
