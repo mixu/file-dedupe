@@ -1,0 +1,36 @@
+{
+  "name": "file-dedupe",
+  "version": "0.0.0",
+  "description": "Fast duplicate file detection library",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/mixu/file-dedupe.git"
+  },
+  "keywords": [
+    "dedupe",
+    "file",
+    "deduplication",
+    "duplicate",
+    "fs",
+    "hash"
+  ],
+  "author": "Mikito Takada <mikito.takada@gmail.com> (http://mixu.net/)",
+  "license": "BSD",
+  "bugs": {
+    "url": "https://github.com/mixu/file-dedupe/issues"
+  },
+  "homepage": "https://github.com/mixu/file-dedupe",
+  "devDependencies": {
+    "file-fixture": "0.0.0"
+  },
+  "dependencies": {
+    "glob-stream": "^3.1.11",
+    "microee": "0.0.5",
+    "miniq": "0.0.1",
+    "yargs": "^1.2.2"
+  }
+}
