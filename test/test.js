@@ -1,4 +1,5 @@
 var fs = require('fs'),
+    path = require('path'),
     assert = require('assert'),
     fixture = require('file-fixture'),
     Dedupe = require('../index.js'),
@@ -70,7 +71,84 @@ exports['tests'] = {
       assert.deepEqual(results, [ false, 'a.js', false ]);
       onDone();
     });
+  },
+
+  'when queuing two files with the same file size, wait until the pending operation is complete': function(onDone) {
+    var tmpDir = fixture.dir({
+      'a.js': 'aaa',
+      'b.js': 'aaa',
+      'c.js': 'aaa',
+      'd.js': 'aaa',
+    });
+    var dedupe = new Dedupe(),
+        results = [],
+        calls = [];
+
+    // override _findBySize
+    var oldFindBySize = dedupe._findBySize;
+    dedupe._findBySize = function(filename, stat, onDone) {
+      var base = path.basename(filename),
+          timeout = 0,
+          args = Array.prototype.slice.call(arguments);
+      calls.push(base + ' _findBySize');
+      switch(base) {
+        case 'a.js':
+          timeout = 100;
+          break;
+        case 'b.js':
+          timeout = 1000;
+          break;
+        case 'c.js':
+          timeout = 10;
+          break;
+        case 'd.js':
+          timeout = 300;
+          break;
+      }
+
+      setTimeout(function() {
+        oldFindBySize.apply(dedupe, args);
+      }, timeout);
+    };
+
+    var tasks = fs.readdirSync(tmpDir).sort(nameSort).map(function(name, i) {
+      return function(done) {
+        calls.push(name + ' find');
+        // use statSync to ensure that call order = ._check invocation order
+        dedupe.find(tmpDir + '/' + name, fs.statSync(tmpDir + '/' + name), function(err, result) {
+          calls.push(name + ' done');
+          results[i] = result;
+          if (err) {
+            return done(err);
+          }
+          done();
+        });
+      };
+    });
+    parallel(Infinity, tasks, function(err) {
+      results = results.map(removePrefix(tmpDir + '/'))
+      assert.deepEqual(results, [ false, 'a.js', 'a.js', 'a.js' ]);
+
+      assert.deepEqual(calls, [
+        // first file of a particular size is resolved instantly
+        'a.js find',
+        'a.js done',
+        // calls go in map order
+        'b.js find',
+        'c.js find',
+        'd.js find',
+        // thanks to the per-size queue, the calls
+        // are attempted in call order and resolved in call order
+        'b.js _findBySize',
+        'b.js done',
+        'c.js _findBySize',
+        'c.js done',
+        'd.js _findBySize',
+        'd.js done' ]);
+      onDone();
+    });
   }
+
 };
 
 

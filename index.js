@@ -12,6 +12,9 @@ function Dedupe(opts) {
   this.statCalls = 0;
   this.seen = {};
   this.sync = (opts && opts.async ? false : true);
+  // queue to prevent race conditions between two files of the same size
+  this.sizePending = {};
+  this.sizeQueue = [];
 }
 
 Dedupe.prototype.find = function(filename, stat, onDone) {
@@ -37,11 +40,24 @@ Dedupe.prototype.find = function(filename, stat, onDone) {
   }
 };
 
+Dedupe.prototype.releaseSize = function(size) {
+  this.sizePending[size] = false;
+  if (this.sizeQueue.length > 0) {
+    this._check.apply(this, this.sizeQueue.shift());
+  }
+};
+
 Dedupe.prototype._check = function(filename, stat, onDone) {
   var self = this;
   if (!stat.isFile() || stat.size === 0) {
     return onDone(null, false, stat);
   }
+
+  if (this.sizePending[stat.size]) {
+    this.sizeQueue.push([filename, stat, onDone]);
+    return;
+  }
+  this.sizePending[stat.size] = true;
 
   self.sizeByName[filename] = stat.size;
 
@@ -50,7 +66,9 @@ Dedupe.prototype._check = function(filename, stat, onDone) {
       self.inodeByDev[stat.dev] = {};
     }
     if (self.inodeByDev[stat.dev][stat.ino]) {
-      return onDone(null, self.inodeByDev[stat.dev][stat.ino], stat);
+      onDone(null, self.inodeByDev[stat.dev][stat.ino], stat);
+      this.releaseSize(stat.size);
+      return;
     } else {
       self.inodeByDev[stat.dev][stat.ino] = filename;
     }
@@ -59,12 +77,17 @@ Dedupe.prototype._check = function(filename, stat, onDone) {
   // pick up the candidate match
   if (!self.bySize[stat.size]) {
     self.bySize[stat.size] = [ filename ];
-    return onDone(null, false, stat);
+    onDone(null, false, stat);
+    this.releaseSize(stat.size);
+    return;
   } else if (!self.seen[filename]){
     self.bySize[stat.size].push(filename);
   }
   self.seen[filename] = true;
-  self._findBySize(filename, stat, onDone);
+  self._findBySize(filename, stat, function(err, result) {
+    onDone(err, result, stat);
+    self.releaseSize(stat.size);
+  });
 };
 
 Dedupe.prototype._findBySize = function(filename, stat, onDone) {
@@ -72,7 +95,7 @@ Dedupe.prototype._findBySize = function(filename, stat, onDone) {
       result = false;
   // only this file
   if (this.bySize[stat.size].length === 1) {
-    return onDone(null, false, stat);
+    return onDone(null, false);
   }
 
   if (!self.hashByName[filename]) {
@@ -98,7 +121,7 @@ Dedupe.prototype._findBySize = function(filename, stat, onDone) {
     };
   }), function(err) {
     if (err) {
-      return onDone(err, false, stat);
+      return onDone(err, false);
     }
     // // remove the file from the list if it is not unique
     // if (!result) {
@@ -106,7 +129,7 @@ Dedupe.prototype._findBySize = function(filename, stat, onDone) {
     //   self.bySize[stat.size].splice(index, 1);
     // }
 
-    onDone(null, result, stat);
+    onDone(null, result);
   });
 };
 
