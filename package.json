@@ -33,7 +33,7 @@
   "dependencies": {
     "bytes": "1.0.0",
     "microee": "0.0.5",
-    "miniq": "~0.1.1",
+    "miniq": "~0.1.2",
     "yargs": "~1.2.6"
   }
 }
