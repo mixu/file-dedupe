@@ -35,6 +35,17 @@ Dedupe.prototype.find = function(filename, stat, onDone) {
       }
       self._check(filename, stat, onDone);
     });
+/*
+    // use statSync to force the order in which calls get queued to be
+    // consistent across different traversals as long as the .find call
+    // order is consistent across different traversals
+    try {
+      this._check(filename, fs.statSync(filename), onDone);
+    } catch (err) {
+      console.error('fs.stat failed for ' + filename + '.', err);
+      return onDone(err, false, null);
+    }
+    */
   } else {
     this._check(filename, stat, onDone);
   }
@@ -123,12 +134,6 @@ Dedupe.prototype._findBySize = function(filename, stat, onDone) {
     if (err) {
       return onDone(err, false);
     }
-    // // remove the file from the list if it is not unique
-    // if (!result) {
-    //   var index = self.bySize[stat.size].indexOf(filename);
-    //   self.bySize[stat.size].splice(index, 1);
-    // }
-
     onDone(null, result);
   });
 };
@@ -209,6 +214,133 @@ Dedupe.prototype.compare = function(nameA, nameB, onDone) {
     return;
   }
   more(index);
-}
+};
+
+// deduplication is sensitive to input order, because as each file is inputted
+// it is matched against the currently known set of potential duplicates,
+// which depends on the exact input order.
+// To fix issues resulting from this, the canonicalize function re-evaluates
+// the comparisons, normalizing the duplication results
+Dedupe.prototype.canonicalize = function(onDone) {
+  var self = this,
+      sizeTasks = [],
+      allClusters = [];
+
+  // use the sizeByName object since bySize only has entries
+  // for files that do not have the same inode
+
+  var allBySize = {};
+  Object.keys(self.sizeByName).forEach(function(name) {
+    if (!allBySize[self.sizeByName[name]]) {
+      allBySize[self.sizeByName[name]] = [ name ];
+    } else {
+      allBySize[self.sizeByName[name]].push(name);
+    }
+  });
+
+
+  // for each size set
+  Object.keys(allBySize).forEach(function(size) {
+    if (allBySize[size].length < 2) {
+      return; // nop
+    }
+
+    var set = allBySize[size],
+        setTasks = [],
+        clusters = [];
+    // iterate over unordered sets (that is, compare each pair once
+    // rather than comparing every item to every other item)
+
+    function add(i, j) {
+      setTasks.push(function(done) {
+        if (!self.hashByName[set[i]]) {
+          self.hashByName[set[i]] = new Hash(set[i], self.sizeByName[set[i]]);
+        }
+        if (!self.hashByName[set[j]]) {
+          self.hashByName[set[j]] = new Hash(set[j], self.sizeByName[set[j]]);
+        }
+        // console.log(i, j, set[i], set[j]);
+
+        self.compare(set[i], set[j], function(err, result) {
+          // console.log(set[i], set[j], result);
+          if (result) {
+            var min = Math.min(i, j),
+                max = Math.max(i, j);
+            // there can be at most set.length clusters (of size one)
+            // iterate over all set.length clusters, and store the items
+            // in the lowest-index set that contains at least one of the two items
+            // (since equality is transitive)
+            for(var k = 0; k < set.length; k++) {
+              if (!clusters[k]) {
+                continue;
+              }
+              if (clusters[k][min]) {
+                clusters[k][max] = true;
+                break;
+              } else if (clusters[k][j]) {
+                clusters[k][min] = true;
+                break;
+              }
+            }
+            // neither item was in any of the clusters, so create a new cluster at
+            // the smallert index
+            if (k == set.length) {
+              clusters[min] = {};
+              clusters[min][i] = true;
+              clusters[min][j] = true;
+            }
+          }
+          return done(err);
+        });
+      });
+    }
+
+    var i, j;
+    for (i = 0; i <= set.length; i++) {
+      for (j = i + 1; j < set.length; j++) {
+        add(i, j);
+      }
+    }
+
+    sizeTasks.push(function(done) {
+      parallel(Infinity, setTasks, function(err) {
+        if (err) {
+          return done(err);
+        }
+        clusters.forEach(function(cluster) {
+          if (cluster) {
+            allClusters.push(
+              Object.keys(cluster)
+                .map(function(i) { return set[i]; })
+            );
+          }
+        });
+        // console.log('Size', size, set);
+        // console.log(clusters);
+        done();
+      });
+    });
+  });
+
+  parallel(1, sizeTasks, function(err) {
+    var map = {};
+    allClusters.forEach(function(cluster) {
+      var canonical = cluster.sort(function(a, b) {
+        var lengthComparison = a.length - b.length;
+        // primary sort: length, secondary sort: name
+        if (lengthComparison != 0) {
+          return lengthComparison;
+        }
+        return a.localeCompare(b);
+      })[0];
+      cluster.forEach(function(name) {
+        // console.log(name, '=>', canonical);
+        map[name] = canonical;
+      });
+    });
+
+    onDone(err, map);
+  });
+};
 
 module.exports = Dedupe;

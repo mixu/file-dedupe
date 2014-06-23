@@ -36,7 +36,7 @@ function run(tmpDir, onDone) {
 }
 
 exports['tests'] = {
-
+/*
   'can detect simple duplicates': function(onDone) {
 
     var tmpDir = fixture.dir({
@@ -147,6 +147,56 @@ exports['tests'] = {
         'd.js done' ]);
       onDone();
     });
+  },
+  */
+
+  'canonicalize names after running in reverse order': function(onDone) {
+    var tmpDir = fixture.dir({
+      'f.js': 'ccc',
+      'e.js': 'bbb',
+      'd.js': 'aaa',
+      'c.js': 'bbb',
+      'b.js': 'aaa',
+      'a.js': 'aaa'
+    });
+
+  var dedupe = new Dedupe(),
+      results = {};
+
+    // reverse sorted order
+    var tasks = fs.readdirSync(tmpDir).sort(function(a, b) {
+      return 0 - nameSort(a, b);
+    }).map(function(name, i) {
+      return function(done) {
+        dedupe.find(tmpDir + '/' + name, function(err, result) {
+          results[tmpDir + '/' + name] = result;
+          if (err) {
+            return done(err);
+          }
+          done();
+        });
+      };
+    });
+    parallel(1, tasks, function(err) {
+      if (err) {
+        throw err;
+      }
+
+      console.log(results);
+
+      dedupe.canonicalize(function(err, map) {
+        console.log('canonicalized!');
+
+        Object.keys(results).forEach(function(source) {
+          if (map[source] && map[source] != results[source]) {
+            console.log(source, '=>', map[source]);
+          }
+        });
+
+        onDone();
+      });
+    });
+
   }
 
 };
