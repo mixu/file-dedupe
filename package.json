@@ -1,6 +1,6 @@
 {
   "name": "file-dedupe",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Fast duplicate file detection library",
   "main": "index.js",
   "scripts": {
