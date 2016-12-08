@@ -7,13 +7,15 @@ var opts = require('yargs')
     .boolean('list')
     .boolean('stdin')
     .boolean('async')
+    .boolean('delete')
     argv = opts.parse(process.argv);
 
 var fs = require('fs'),
     path = require('path'),
     Dedupe = require('../index.js'),
     parallel = require('miniq'),
-    bytes = require('bytes');
+    bytes = require('bytes'),
+    trash = require('trash');
 
 var dedupe = new Dedupe({ async: argv.async }),
     queue = parallel(32),
@@ -279,5 +281,20 @@ function report() {
       });
       console.log();
     });
+  }
+  if (argv.delete) {
+    var length = 0;
+    Promise
+      .all(clusters.map(function(cluster, i) {
+        if (argv['omit-first']) {
+          cluster = cluster.slice(1);
+        }
+
+        length += cluster.length;
+        return trash(cluster);
+      }))
+      .then(function() {
+        console.error('Successfully deleted ' + length + ' files.');
+      });
   }
 }
