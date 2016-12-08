@@ -118,6 +118,10 @@ if (argv.stdin) {
   walk(argv.include);
   process.stderr.write('\n');
   // eliminate length-0
+  if (!tasks.length) {
+    console.error('The folder is empty.');
+    return;
+  }
   if (tasks[0][1]) {
     prev = tasks.length;
     tasks = tasks.filter(function(item) { return item[1].size > 0; });
@@ -137,6 +141,10 @@ if (argv.stdin) {
     });
     console.error('Removed ' + (prev - tasks.length) + ' files with unique file sizes from the list.');
     countBySize = null;
+  }
+  if (!tasks.length) {
+    console.error('No duplicate files were found.');
+    return;
   }
 
   run();
