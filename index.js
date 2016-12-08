@@ -72,7 +72,9 @@ Dedupe.prototype._check = function(filename, stat, onDone) {
 
   self.sizeByName[filename] = stat.size;
 
-  if (stat.ino !== 0) {
+  // stat.ino is no longer 0 on Windows.
+  // https://github.com/nodejs/node-v0.x-archive/issues/2670
+  if (stat.ino !== 0 && process.platform != "win32") {
     if (!self.inodeByDev[stat.dev]) {
       self.inodeByDev[stat.dev] = {};
     }
