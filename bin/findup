@@ -15,7 +15,8 @@ var fs = require('fs'),
     Dedupe = require('../index.js'),
     parallel = require('miniq'),
     bytes = require('bytes'),
-    trash = require('trash');
+    trash = require('trash'),
+    naturalSort = require('javascript-natural-sort');
 
 var dedupe = new Dedupe({ async: argv.async }),
     queue = parallel(32),
@@ -240,6 +241,13 @@ function report() {
   // sort by total size
   clusters.sort(function(a, b) {
     return (b.length * sizes[b[0]]) - (a.length * sizes[a[0]] );
+  });
+  
+  // sort by file path
+  clusters.forEach(function(cluster) {
+    var size = sizes[cluster[0]];
+    cluster.sort(naturalSort);
+    sizes[cluster[0]] = size;
   });
 
   if (argv.json) {
