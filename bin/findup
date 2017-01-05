@@ -7,13 +7,16 @@ var opts = require('yargs')
     .boolean('list')
     .boolean('stdin')
     .boolean('async')
+    .boolean('delete')
     argv = opts.parse(process.argv);
 
 var fs = require('fs'),
     path = require('path'),
     Dedupe = require('../index.js'),
     parallel = require('miniq'),
-    bytes = require('bytes');
+    bytes = require('bytes'),
+    trash = require('trash'),
+    naturalSort = require('javascript-natural-sort');
 
 var dedupe = new Dedupe({ async: argv.async }),
     queue = parallel(32),
@@ -118,6 +121,10 @@ if (argv.stdin) {
   walk(argv.include);
   process.stderr.write('\n');
   // eliminate length-0
+  if (!tasks.length) {
+    console.error('The folder is empty.');
+    return;
+  }
   if (tasks[0][1]) {
     prev = tasks.length;
     tasks = tasks.filter(function(item) { return item[1].size > 0; });
@@ -137,6 +144,10 @@ if (argv.stdin) {
     });
     console.error('Removed ' + (prev - tasks.length) + ' files with unique file sizes from the list.');
     countBySize = null;
+  }
+  if (!tasks.length) {
+    console.error('No duplicate files were found.');
+    return;
   }
 
   run();
@@ -231,6 +242,13 @@ function report() {
   clusters.sort(function(a, b) {
     return (b.length * sizes[b[0]]) - (a.length * sizes[a[0]] );
   });
+  
+  // sort by file path
+  clusters.forEach(function(cluster) {
+    var size = sizes[cluster[0]];
+    cluster.sort(naturalSort);
+    sizes[cluster[0]] = size;
+  });
 
   if (argv.json) {
     clusters.forEach(function(cluster) {
@@ -271,5 +289,20 @@ function report() {
       });
       console.log();
     });
+  }
+  if (argv.delete) {
+    var length = 0;
+    Promise
+      .all(clusters.map(function(cluster, i) {
+        if (argv['omit-first']) {
+          cluster = cluster.slice(1);
+        }
+
+        length += cluster.length;
+        return trash(cluster);
+      }))
+      .then(function() {
+        console.error('Successfully deleted ' + length + ' files.');
+      });
   }
 }

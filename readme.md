@@ -49,6 +49,10 @@ Options:
     --json           Return JSON output
     --omit-first     Omit the first file in each set of matches
     --async          Use async I/O instead of sync I/O (async is often slower)
+
+    --delete         Delete duplicate files (all files will be deleted unless
+                     --omit-first is set)
+
     --help           Display help
     -v, --version    Display version
 
