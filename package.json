@@ -22,7 +22,7 @@
     "hash"
   ],
   "author": "Mikito Takada <mikito.takada@gmail.com> (http://mixu.net/)",
-  "license": "BSD",
+  "license": "BSD-3-Clause",
   "bugs": {
     "url": "https://github.com/mixu/file-dedupe/issues"
   },
